@@ -1,0 +1,87 @@
+stages:
+  - dependencies
+  - build
+  - deploy
+
+variables:
+  APP_NAME: powermate_${ENV}_authorizer_lambda
+workflow:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"
+      variables:
+        ENV: prod
+    - if: $CI_COMMIT_BRANCH == "develop" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"
+      variables:
+        ENV: dev
+
+image: golang:1.20-alpine
+
+.go-cache:
+  variables:
+    GOPATH: $CI_PROJECT_DIR/.go
+  before_script:
+    - mkdir -p .go
+  cache:
+    key: GO_DOWNLOAD_CACHE-$CI_COMMIT_SHA
+    paths:
+      - .go/pkg/mod/
+
+dependencies:
+  stage: dependencies
+  extends: .go-cache
+  script:
+    - pwd
+    - ls -al
+    - go mod download
+  artifacts:
+    expire_in: 1h
+    paths:
+      - .go/
+
+build:
+  stage: build
+  variables:
+    GOOS: linux
+    GOARCH: amd64
+    CGO_ENABLED: 0
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_PIPELINE_SOURCE == 'merge_request_event'
+      when: always
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+    - changes:
+        paths:
+          - src/*
+      when: always
+  before_script:
+    - apk update
+    - apk add zip
+    - apk add --no-cache --upgrade bash
+  script:
+    - echo "Building $APP_NAME"
+    - go build -o $APP_NAME src/main.go
+    - zip -r $APP_NAME.zip $APP_NAME
+  artifacts:
+    expire_in: 1h
+    paths:
+      - $APP_NAME.zip
+
+deploy-lambda:
+  image:
+    name: amazon/aws-cli:latest
+    entrypoint: [ "" ]
+  stage: deploy
+  needs:
+    - build
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_success
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+      changes:
+        paths:
+          - src/*
+      when: on_success
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+  script:
+    - aws lambda update-function-code --function-name $APP_NAME --zip-file fileb://$APP_NAME.zip

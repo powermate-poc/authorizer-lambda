@@ -1,0 +1,2 @@
+GET https://a23ypr2qzg.execute-api.eu-central-1.amazonaws.com/api/devices
+Authorization: Bearer trust me bro
